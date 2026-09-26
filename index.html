@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Metro Manager</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="shell">
+<header>
+  <div><p class="eyebrow">METRO CONTROL</p><h1>Metro Manager</h1></div>
+  <div class="stats">
+    <div><span>Score</span><b id="score">0</b></div>
+    <div><span>Best</span><b id="best">0</b></div>
+    <div><span>Level</span><b id="level">1</b></div>
+    <div><span>Trains</span><b id="handled">0</b></div>
+  </div>
+</header>
+
+<section class="card">
+  <div class="status"><span><i></i><strong id="status">Ready for service</strong></span><label>Next train <em><u id="spawnBar"></u></em></label></div>
+
+  <div class="map" id="map">
+    <div class="title">CENTRAL METRO</div>
+    <div class="track v v1"></div><div class="track v v2"></div><div class="track v v3"></div><div class="track v v4"></div>
+    <div class="track h h1"></div><div class="track h h2"></div>
+    <div class="platform p1">PLATFORM 1 <b id="p1">—</b></div>
+    <div class="platform p2">PLATFORM 2 <b id="p2">—</b></div>
+    <div class="platform p3">PLATFORM 3 <b id="p3">—</b></div>
+    <div class="platform p4">PLATFORM 4 <b id="p4">—</b></div>
+    <button class="switch s1" data-n="1">1</button>
+    <button class="switch s2" data-n="2">2</button>
+    <button class="switch s3" data-n="3">3</button>
+    <button class="switch s4" data-n="4">4</button>
+    <div id="trains"></div>
+    <div class="junction"></div>
+  </div>
+
+  <div class="bottom">
+    <div><b>Switch tracks</b><small>W / ↑ = 1 &nbsp; A / ← = 2 &nbsp; S / ↓ = 3 &nbsp; D / → = 4</small></div>
+    <div class="actions">
+      <button id="start" class="primary">START SERVICE</button>
+      <button id="pause">PAUSE</button>
+      <button id="sound">🔊 SOUND</button>
+    </div>
+  </div>
+</section>
+
+<p class="legend"><span>● Incoming</span><span>● Target platform</span><span>● Active switch</span> Route each train to its matching platform.</p>
+</main>
+
+<div class="modal hidden" id="modal">
+  <div class="modalbox">
+    <p class="eyebrow">SERVICE ENDED</p>
+    <h2>Game Over</h2>
+    <p id="reason">A train was not routed safely.</p>
+    <div class="final"><small>FINAL SCORE</small><b id="final">0</b></div>
+    <button id="again" class="primary">RUN AGAIN</button>
+  </div>
+</div>
+<script src="script.js"></script>
+</body>
+</html>
