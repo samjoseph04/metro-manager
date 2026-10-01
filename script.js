@@ -1,65 +1,211 @@
-const $=s=>document.querySelector(s);
-const layer=$("#trains"), map=$("#map"), switches=[...document.querySelectorAll(".switch")];
-let running=false,paused=false,score=0,handled=0,level=1,best=+localStorage.getItem("metroBest")||0;
-let trains=[],spawn=0,interval=2200,last=0,raf=0,sound=true,audio;
+(() => {
+"use strict";
 
-$("#best").textContent=best;
+/* ---------- DOM ---------- */
+const $ = s => document.querySelector(s);
+const ui = {
+  layer: $("#trains"), status: $("#status"), dot: $("#dot"), bar: $("#spawnBar"),
+  score: $("#score"), best: $("#best"), level: $("#level"), handled: $("#handled"),
+  start: $("#start"), pause: $("#pause"), sound: $("#sound"),
+  modal: $("#modal"), mTitle: $("#mTitle"), mEyebrow: $("#mEyebrow"),
+  reason: $("#reason"), final: $("#final"), again: $("#again"),
+};
+const switches = [...document.querySelectorAll(".switch")];
+const platBoxes = [...document.querySelectorAll(".platform")];
+const platCounts = platBoxes.map(p => p.querySelector("b"));
 
-function beep(freq=500,d=.07){if(!sound)return;try{audio??=new(window.AudioContext||window.webkitAudioContext)();let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=freq;g.gain.value=.035;o.connect(g);g.connect(audio.destination);o.start();g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+d);o.stop(audio.currentTime+d)}catch(e){}}
-function setSwitch(n){switches.forEach((x,i)=>x.classList.toggle("active",i===n-1));active=n;beep(400+n*80,.06)}
-let active=1;setSwitch(1);
-
-function hud(){$("#score").textContent=score;$("#best").textContent=best;$("#level").textContent=level;$("#handled").textContent=handled}
-const xs=[.13,.35,.57,.79];
-
-function spawnTrain(){
-  const target=1+Math.floor(Math.random()*4), entry=1+Math.floor(Math.random()*4);
-  const el=document.createElement("div");el.className="train target";el.textContent="P"+target;layer.appendChild(el);
-  trains.push({el,target,entry,progress:0,phase:"approach",speed:.000052*(1+level*.11),done:false});
-}
-function pos(t){
-  const r=map.getBoundingClientRect(),w=r.width,h=r.height;
-  const x=xs[t.entry-1]*w+30, targetX=xs[t.target-1]*w+30, jy=.5*h;
-  let px=x-22,py=h-30;
-  if(t.phase==="approach")py=h-30-t.progress*h*.55;
-  if(t.phase==="cross"){px=x-22+(targetX-x)*t.progress;py=jy-11}
-  if(t.phase==="depart"){px=targetX-22;py=jy-11-t.progress*h*.48}
-  t.el.style.transform=`translate(${px}px,${py}px)`
-}
-function gameOver(msg){
-  running=false;cancelAnimationFrame(raf);trains.forEach(t=>t.el.remove());trains=[];
-  if(score>best){best=score;localStorage.setItem("metroBest",best)}
-  $("#reason").textContent=msg;$("#final").textContent=score;$("#modal").classList.remove("hidden");$("#status").textContent="Service ended";beep(140,.25)
-}
-function deliver(t){
-  score+=100+level*20;handled++;if(score>best){best=score;localStorage.setItem("metroBest",best)}
-  t.el.remove();beep(780,.08);hud()
-}
-function tick(now){
-  if(!running)return;raf=requestAnimationFrame(tick);if(!last)last=now;const dt=Math.min(50,now-last);last=now;if(paused)return;
-  spawn+=dt;$("#spawnBar").style.transform=`scaleX(${Math.max(0,1-spawn/interval/spawn*spawn)})`;
-  if(spawn>=interval){spawn=0;spawnTrain()}
-  for(const t of [...trains]){
-    if(t.phase==="approach"){t.progress+=dt*t.speed;if(t.progress>=.86){if(active!==t.target){t.el.classList.add("bad");gameOver("A train reached the junction on the wrong track.");return}t.phase="cross";t.progress=0}}
-    else if(t.phase==="cross"){t.progress+=dt*.00011*(1+level*.1);if(t.progress>=1){t.phase="depart";t.progress=0}}
-    else{t.progress+=dt*t.speed*.85;if(t.progress>=1){trains=trains.filter(x=>x!==t);deliver(t)}}
-    if(t.el.isConnected)pos(t)
-  }
-  const near=trains.filter(t=>t.phase==="approach"&&t.progress>.82);
-  if(near.length>1){gameOver("Two trains reached the junction at the same time.");return}
-}
-function start(){
-  $("#modal").classList.add("hidden");trains.forEach(t=>t.el.remove());trains=[];score=0;handled=0;level=1;spawn=0;interval=2200;last=0;running=true;paused=false;setSwitch(1);hud();$("#start").textContent="RESTART";$("#pause").textContent="PAUSE";$("#status").textContent="Route trains to their matching platforms";raf=requestAnimationFrame(tick)
-}
-function pause(){if(!running)return;paused=!paused;$("#pause").textContent=paused?"RESUME":"PAUSE";$("#status").textContent=paused?"Service paused":"Service running";if(!paused){last=performance.now();raf=requestAnimationFrame(tick)}}
-
-document.addEventListener("keydown",e=>{
- const m={w:1,ArrowUp:1,a:2,ArrowLeft:2,s:3,ArrowDown:3,d:4,ArrowRight:4};let k=e.key.length===1?e.key.toLowerCase():e.key;
- if(m[k]){e.preventDefault();setSwitch(m[k])} else if(e.key===" "){e.preventDefault();running?pause():start()}
+/* ---------- Constants ---------- */
+const CX = [.125, .375, .625, .875];   // lane centres (fraction of map width)
+const JUNCTION_Y = .5, START_Y = 1.06, PLATFORM_Y = .16;
+const DEPART_MS = 1000, WIN_AT = 40;
+const KEYS = { w: 0, ArrowUp: 0, a: 1, ArrowLeft: 1, s: 2, ArrowDown: 2, d: 3, ArrowRight: 3 };
+// All timings are in "game clock" ms, which only advances while running.
+const difficulty = lvl => ({
+  approach: Math.max(4200, 9000 - (lvl - 1) * 600),
+  cross: Math.max(650, 1100 - (lvl - 1) * 60),
+  interval: Math.max(1400, 2600 - (lvl - 1) * 200),
 });
-switches.forEach((b,i)=>b.onclick=()=>setSwitch(i+1));
-$("#start").onclick=start;$("#again").onclick=start;$("#pause").onclick=pause;
-$("#sound").onclick=()=>{sound=!sound;$("#sound").textContent=sound?"🔊 SOUND":"🔇 MUTED";if(sound)beep()};
-setInterval(()=>{if(running&&!paused){level=1+Math.floor(handled/5);interval=Math.max(850,2200-(level-1)*180);hud()}},500);
-addEventListener("resize",()=>trains.forEach(pos));
-hud();
+
+/* ---------- Storage / audio (both fail safe) ---------- */
+const store = {
+  get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+};
+const sfx = {
+  on: store.get("metroSound") !== "0", ctx: null,
+  play(freq, dur = .07) {
+    if (!this.on) return;
+    try {
+      const c = this.ctx ??= new (window.AudioContext || window.webkitAudioContext)();
+      if (c.state === "suspended") c.resume();
+      const o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(.035, t);
+      g.gain.exponentialRampToValueAtTime(.001, t + dur);
+      o.connect(g); g.connect(c.destination);
+      o.start(t); o.stop(t + dur);
+    } catch { /* audio unavailable */ }
+  },
+};
+
+/* ---------- State ---------- */
+// state: idle | running | paused | over | won
+const G = { state: "idle", clock: 0, last: 0, raf: 0, score: 0, handled: 0, level: 1,
+  best: +store.get("metroBest") || 0, active: 0, trains: [], next: null,
+  lastSpawn: 0, lastArrival: -1e9, delivered: [0, 0, 0, 0] };
+
+/* ---------- Rendering helpers ---------- */
+function renderHud() {
+  ui.score.textContent = G.score; ui.best.textContent = G.best;
+  ui.level.textContent = G.level; ui.handled.textContent = G.handled;
+  platCounts.forEach((el, i) => el.textContent = G.delivered[i]);
+}
+function renderControls() {
+  const msg = {
+    idle: ["Ready for service", ""], running: ["Route each train to its platform", "on"],
+    paused: ["Service paused", "warn"], over: ["Service ended", "off"], won: ["Line cleared", "on"],
+  }[G.state];
+  ui.status.textContent = msg[0]; ui.dot.className = msg[1];
+  ui.start.textContent = G.state === "idle" ? "START SERVICE" : "RESTART";
+  ui.pause.disabled = G.state !== "running" && G.state !== "paused";
+  ui.pause.textContent = G.state === "paused" ? "RESUME" : "PAUSE";
+}
+function place(t, x, y) { t.el.style.left = x * 100 + "%"; t.el.style.top = y * 100 + "%"; }
+const lerp = (a, b, p) => a + (b - a) * p;
+
+function markNext() {
+  const n = G.trains.find(t => t.phase === "approach") || null;
+  if (n === G.next) return;
+  G.next?.el.classList.remove("next");
+  platBoxes.forEach(p => p.classList.remove("target"));
+  G.next = n;
+  if (n) { n.el.classList.add("next"); platBoxes[n.target].classList.add("target"); }
+}
+
+/* ---------- Game logic ---------- */
+function setSwitch(i) {
+  G.active = i;
+  switches.forEach((b, k) => { b.classList.toggle("active", k === i); b.setAttribute("aria-pressed", k === i); });
+  sfx.play(400 + (i + 1) * 80, .06);
+}
+
+function trySpawn() {
+  const d = difficulty(G.level), arrive = G.clock + d.approach;
+  // Arrivals are scheduled at least one crossing apart, so a perfect player can never be forced to crash.
+  if (arrive < G.lastArrival + d.cross + 350) return false;
+  // Don't stack trains on top of each other in one lane.
+  const free = [0, 1, 2, 3].filter(i => !G.trains.some(t => t.entry === i && t.phase === "approach" && (G.clock - t.t0) / t.approach < .3));
+  if (!free.length) return false;
+  const el = document.createElement("div"), target = Math.floor(Math.random() * 4);
+  const t = { el, entry: free[Math.floor(Math.random() * free.length)], target, phase: "approach", t0: G.clock, approach: d.approach, cross: d.cross, t1: 0 };
+  el.className = "train"; el.textContent = "P" + (target + 1);
+  place(t, CX[t.entry], START_Y);
+  ui.layer.appendChild(el);
+  G.trains.push(t);
+  G.lastSpawn = G.clock; G.lastArrival = arrive;
+  return true;
+}
+
+function deliver(t) {
+  G.trains.splice(G.trains.indexOf(t), 1); t.el.remove();
+  G.handled++; G.delivered[t.target]++;
+  G.score += 100 + G.level * 20;
+  G.level = 1 + Math.floor(G.handled / 5);
+  if (G.score > G.best) { G.best = G.score; store.set("metroBest", G.best); }
+  sfx.play(780, .08);
+  renderHud();
+  if (G.handled >= WIN_AT) finish("won", `All ${WIN_AT} trains delivered. Perfect shift.`);
+}
+
+function finish(kind, msg, culprit) {
+  G.state = kind; stopLoop();
+  culprit?.el.classList.add("bad");
+  ui.mEyebrow.textContent = kind === "won" ? "SHIFT COMPLETE" : "SERVICE ENDED";
+  ui.mTitle.textContent = kind === "won" ? "Victory!" : "Game Over";
+  ui.reason.textContent = msg; ui.final.textContent = G.score;
+  ui.modal.classList.remove("hidden");
+  sfx.play(kind === "won" ? 990 : 140, kind === "won" ? .3 : .25);
+  renderControls(); renderHud();
+  ui.again.focus();
+}
+
+function step() {
+  for (const t of G.trains.slice()) {
+    if (t.phase === "approach") {
+      const p = (G.clock - t.t0) / t.approach;
+      if (p < 1) { place(t, CX[t.entry], lerp(START_Y, JUNCTION_Y, p)); continue; }
+      if (G.trains.some(o => o.phase === "cross")) return finish("over", "Two trains collided at the junction.", t);
+      if (G.active !== t.target) return finish("over", `Train P${t.target + 1} reached the junction on the wrong track.`, t);
+      t.phase = "cross"; t.t1 = G.clock; markNext();
+    }
+    if (t.phase === "cross") {
+      const p = (G.clock - t.t1) / t.cross;
+      if (p < 1) { place(t, lerp(CX[t.entry], CX[t.target], p), JUNCTION_Y); continue; }
+      t.phase = "depart"; t.t2 = G.clock;
+    }
+    const p = Math.min(1, (G.clock - t.t2) / DEPART_MS);
+    place(t, CX[t.target], lerp(JUNCTION_Y, PLATFORM_Y, p));
+    if (p >= 1) { deliver(t); if (G.state === "won") return; }
+  }
+}
+
+function tick(now) {
+  G.raf = requestAnimationFrame(tick);
+  const dt = Math.min(50, now - (G.last || now)); G.last = now;
+  G.clock += dt;
+  const d = difficulty(G.level);
+  if (G.clock - G.lastSpawn >= d.interval) trySpawn();
+  markNext();
+  step();
+  if (G.state === "running") ui.bar.style.transform = `scaleX(${Math.max(0, 1 - (G.clock - G.lastSpawn) / d.interval)})`;
+}
+
+/* ---------- Loop / state control (exactly one rAF loop at any time) ---------- */
+function startLoop() { if (!G.raf) { G.last = 0; G.raf = requestAnimationFrame(tick); } }
+function stopLoop() { cancelAnimationFrame(G.raf); G.raf = 0; }
+
+function start() {
+  stopLoop();
+  G.trains.forEach(t => t.el.remove());
+  Object.assign(G, { trains: [], next: null, clock: 0, score: 0, handled: 0, level: 1,
+    lastSpawn: 0, lastArrival: -1e9, delivered: [0, 0, 0, 0], state: "running" });
+  platBoxes.forEach(p => p.classList.remove("target"));
+  ui.modal.classList.add("hidden");
+  ui.bar.style.transform = "scaleX(0)";
+  setSwitch(0); renderHud(); renderControls();
+  trySpawn();            // first train arrives straight away
+  startLoop();
+}
+function togglePause() {
+  if (G.state === "running") { G.state = "paused"; stopLoop(); }
+  else if (G.state === "paused") { G.state = "running"; startLoop(); }
+  else return;
+  renderControls();
+}
+const primary = () => (G.state === "running" || G.state === "paused") ? togglePause() : start();
+
+/* ---------- Input (all listeners registered once) ---------- */
+document.addEventListener("keydown", e => {
+  if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (k in KEYS) { e.preventDefault(); setSwitch(KEYS[k]); }
+  else if ((k === " " || k === "Enter") && !e.target.closest?.("button")) { e.preventDefault(); primary(); }
+  else if (k === "p" || k === "Escape") togglePause();
+});
+switches.forEach((b, i) => b.addEventListener("click", () => setSwitch(i)));
+ui.start.addEventListener("click", start);
+ui.again.addEventListener("click", start);
+ui.pause.addEventListener("click", togglePause);
+ui.sound.addEventListener("click", () => {
+  sfx.on = !sfx.on; store.set("metroSound", sfx.on ? "1" : "0");
+  ui.sound.textContent = sfx.on ? "🔊 SOUND" : "🔇 MUTED"; sfx.play(600);
+});
+// Mouse/touch clicks shouldn't leave focus on a button, or Space would re-trigger it.
+document.addEventListener("click", e => { if (e.detail > 0) e.target.closest?.("button")?.blur(); });
+// Auto-pause when the tab is hidden.
+document.addEventListener("visibilitychange", () => { if (document.hidden && G.state === "running") togglePause(); });
+
+/* ---------- Init ---------- */
+ui.sound.textContent = sfx.on ? "🔊 SOUND" : "🔇 MUTED";
+setSwitch(0); renderHud(); renderControls();
+})();
